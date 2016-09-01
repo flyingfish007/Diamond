@@ -131,8 +131,18 @@ class InfluxdbHandler(Handler):
     def process(self, metric):
         if self.batch_count <= self.metric_max_cache:
             # Add the data to the batch
-            self.batch.setdefault(metric.path, []).append([metric.timestamp,
-                                                           metric.value])
+            metric_full_path = metric.path
+            metric_value = metric.value
+            metric_timestamp = metric.timestamp
+            metric_host = metric.host
+            metric_collect_path = metric.getCollectorPath()
+            metric_path = metric.getMetricPath()
+            self.batch.setdefault(metric_full_path, []).\
+                append({"measurement": metric_collect_path.lower(),
+                        "host": metric_host,
+                        "type_instance": metric_path,
+                        "time": metric_timestamp,
+                        "value": metric_value})
             self.batch_count += 1
         # If there are sufficient metrics, then pickle and send
         if self.batch_count >= self.batch_size and (
@@ -168,16 +178,26 @@ class InfluxdbHandler(Handler):
             else:
                 # build metrics data
                 metrics = []
-                for path in self.batch:
-                    metrics.append({
-                        "points": self.batch[path],
-                        "name": path,
-                        "columns": ["time", "value"]})
+                # fix the issue of latest influxdb
+                for k, data in self.batch.iteritems():
+                    for _data in data:
+                        metrics.append({
+                            "measurement": _data["measurement"],
+                            "tags": {
+                                "host": _data["host"],
+                                "type_instance": _data["type_instance"]
+                            },
+                            "time": _data["time"],
+                            "fields": {
+                                "value": round(float(_data["value"]), 2)
+                            }
+                        })
                 # Send data to influxdb
                 self.log.debug("InfluxdbHandler: writing %d series of data",
                                len(metrics))
                 self.influx.write_points(metrics,
-                                         time_precision=self.time_precision)
+                                         time_precision=self.time_precision,
+                                         batch_size=self.batch_size)
 
                 # empty batch buffer
                 self.batch = {}
